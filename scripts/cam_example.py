@@ -50,6 +50,7 @@ def main(args):
         cam_methods = args.method.split(",")
     else:
         cam_methods = [
+            "ShapleyCAM",
             "CAM",
             "GradCAM",
             "GradCAMpp",

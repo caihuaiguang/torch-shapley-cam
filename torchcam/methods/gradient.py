@@ -11,7 +11,7 @@ from torch import Tensor, nn
 
 from .core import _CAM
 
-__all__ = ["GradCAM", "GradCAMpp", "LayerCAM", "SmoothGradCAMpp", "XGradCAM"]
+__all__ = ["GradCAM", "GradCAMpp", "LayerCAM", "SmoothGradCAMpp", "XGradCAM", "ShapleyCAM"]
 
 
 class _GradCAM(_CAM):
@@ -359,6 +359,125 @@ class XGradCAM(_GradCAM):
             for act, grad in zip(self.hook_a, self.hook_g)
         ]
 
+
+
+class ShapleyCAM(_GradCAM):
+    r"""Implements a class activation map extractor as described in `"Axiom-based Grad-CAM: Towards Accurate
+    Visualization and Explanation of CNNs" <https://arxiv.org/pdf/2008.02312.pdf>`_.
+
+    The localization map is computed as follows:
+
+    .. math::
+        L^{(c)}_{XGrad-CAM}(x, y) = ReLU\Big(\sum\limits_k w_k^{(c)} A_k(x, y)\Big)
+
+    with the coefficient :math:`w_k^{(c)}` being defined as:
+
+    .. math::
+        w_k^{(c)} = \sum\limits_{i=1}^H \sum\limits_{j=1}^W
+        \Big( \frac{\partial Y^{(c)}}{\partial A_k(i, j)} \cdot
+        \frac{A_k(i, j)}{\sum\limits_{m=1}^H \sum\limits_{n=1}^W A_k(m, n)} \Big)
+
+    where :math:`A_k(x, y)` is the activation of node :math:`k` in the target layer of the model at
+    position :math:`(x, y)`,
+    and :math:`Y^{(c)}` is the model output score for class :math:`c` before softmax.
+
+    >>> from torchvision.models import resnet18
+    >>> from torchcam.methods import ShapleyCAM
+    >>> model = resnet18(pretrained=True).eval()
+    >>> cam = ShapleyCAM(model, 'layer4')
+    >>> scores = model(input_tensor)
+    >>> cam(class_idx=100, scores=scores)
+
+    Args:
+        model: input model
+        target_layer: either the target layer itself or its name, or a list of those
+        input_shape: shape of the expected input tensor excluding the batch dimension
+    """
+    def __init__(
+        self,
+        model: nn.Module,
+        target_layer: Optional[Union[Union[nn.Module, str], List[Union[nn.Module, str]]]] = None,
+        input_shape: Tuple[int, ...] = (3, 224, 224),
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(model, target_layer, input_shape, **kwargs)
+        # Input hook
+        self.hook_handles.append(model.register_forward_pre_hook(self._store_input))  # type: ignore[arg-type]
+        self._ihook_enabled = True
+
+    def _store_input(self, _: nn.Module, _input: Tensor) -> None:
+        """Store model input tensor."""
+        if self._ihook_enabled:
+            self.input = _input
+
+    def _hook_a(self, _: nn.Module, _input: Tuple[Tensor, ...], output: Tensor, idx: int = 0) -> None:
+        """Activation hook."""
+        if self._hooks_enabled:
+            self.hook_a[idx] = output
+            output.register_hook(partial(self._store_grad, idx=idx))
+
+    def _store_grad(self, grad: Tensor, idx: int = 0) -> None:
+        if self._hooks_enabled:
+            self.hook_g[idx] = grad
+            # print(grad.grad_fn)
+
+    def _get_weights(
+        self,
+        class_idx: Union[int, List[int]],
+        scores: Tensor,
+        eps: float = 1e-8,
+        **kwargs: Any,
+    ) -> List[Tensor]:
+        """Computes the weight coefficients of the hooked activation maps."""
+        # Backpropagate
+        if isinstance(class_idx, int):
+            loss = scores[:, class_idx].sum()
+        else:
+            loss = scores.gather(1, torch.tensor(class_idx, device=scores.device).view(-1, 1)).sum()
+        self.model.zero_grad()
+        self._hooks_enabled = True
+        torch.autograd.grad(loss, self.input,  retain_graph = True, create_graph = True)
+        # self._backprop(scores, class_idx, retain_graph = True, create_graph = True, **kwargs)
+        self.hook_a: List[Tensor]  # type: ignore[assignment]
+        self.hook_g: List[Tensor]  # type: ignore[assignment]
+        self.model.zero_grad()
+        self._hooks_enabled = False
+        hvp = torch.autograd.grad(
+            outputs=self.hook_g,
+            inputs=self.hook_a,
+            grad_outputs=self.hook_a,
+            retain_graph=False
+        )
+        # li = [
+        #     (grad - 0.5*act_T_H * act).flatten(2).mean(-1)
+        #     for act, grad, act_T_H in zip(self.hook_a, self.hook_g ,hvp)
+        # ]
+        # print(torch.norm(hvp[0]))
+        li = [
+            (grad - 0.5*act_T_H).flatten(2).mean(-1)
+            for grad, act_T_H in zip(self.hook_g ,hvp)
+        ]
+
+        # import gc
+        #
+        # for param in self.model.parameters():
+        #     if param.grad is not None:
+        #         param.grad.to('cpu')
+        #     param.to('cpu')
+        #     param.grad = None
+        #     param = None
+        #     del param
+        #
+        # scores.to('cpu')
+        # scores = None
+        # self.model = None
+        # del self.model
+        # del scores
+        # gc.collect(generation=2)
+        # torch.cuda.empty_cache()
+        # del self.model
+        # self.model.zero_grad()
+        return li
 
 class LayerCAM(_GradCAM):
     r"""Implements a class activation map extractor as described in `"LayerCAM: Exploring Hierarchical Class Activation
