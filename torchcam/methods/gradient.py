@@ -419,7 +419,6 @@ class ShapleyCAM(_GradCAM):
     def _store_grad(self, grad: Tensor, idx: int = 0) -> None:
         if self._hooks_enabled:
             self.hook_g[idx] = grad
-            # print(grad.grad_fn)
 
     def _get_weights(
         self,
@@ -437,7 +436,7 @@ class ShapleyCAM(_GradCAM):
         self.model.zero_grad()
         self._hooks_enabled = True
         torch.autograd.grad(loss, self.input,  retain_graph = True, create_graph = True)
-        # self._backprop(scores, class_idx, retain_graph = True, create_graph = True, **kwargs)
+        
         self.hook_a: List[Tensor]  # type: ignore[assignment]
         self.hook_g: List[Tensor]  # type: ignore[assignment]
         self.model.zero_grad()
@@ -453,31 +452,11 @@ class ShapleyCAM(_GradCAM):
         #     for act, grad, act_T_H in zip(self.hook_a, self.hook_g ,hvp)
         # ]
         # print(torch.norm(hvp[0]))
-        li = [
+        weight = [
             (grad - 0.5*act_T_H).flatten(2).mean(-1)
             for grad, act_T_H in zip(self.hook_g ,hvp)
         ]
-
-        # import gc
-        #
-        # for param in self.model.parameters():
-        #     if param.grad is not None:
-        #         param.grad.to('cpu')
-        #     param.to('cpu')
-        #     param.grad = None
-        #     param = None
-        #     del param
-        #
-        # scores.to('cpu')
-        # scores = None
-        # self.model = None
-        # del self.model
-        # del scores
-        # gc.collect(generation=2)
-        # torch.cuda.empty_cache()
-        # del self.model
-        # self.model.zero_grad()
-        return li
+        return weight
 
 class LayerCAM(_GradCAM):
     r"""Implements a class activation map extractor as described in `"LayerCAM: Exploring Hierarchical Class Activation
