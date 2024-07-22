@@ -65,6 +65,10 @@ class ClassificationMetric:
     def _get_probs(self, input_tensor: torch.Tensor) -> torch.Tensor:
         logits = self.cam_extractor.model(input_tensor)
         return cast(torch.Tensor, logits if self.logits_fn is None else self.logits_fn(logits))
+    
+    def _get_scores(self, input_tensor: torch.Tensor) -> torch.Tensor:
+        logits = self.cam_extractor.model(input_tensor)
+        return cast(torch.Tensor, logits)
 
     def my_function(self) -> str:
         """Returns a greeting message
@@ -87,14 +91,15 @@ class ClassificationMetric:
         """
         self.cam_extractor.model.eval()
         probs = self._get_probs(input_tensor)
+        scores = self._get_scores(input_tensor)
         # Take the top preds for the cam
         if isinstance(class_idx, int):
-            cams = self.cam_extractor(class_idx, probs)
+            cams = self.cam_extractor(class_idx, scores)
             cam = self.cam_extractor.fuse_cams(cams)
             probs = probs[:, class_idx]
         else:
             preds = probs.argmax(dim=-1)
-            cams = self.cam_extractor(preds.cpu().numpy().tolist(), probs)
+            cams = self.cam_extractor(preds.cpu().numpy().tolist(), scores)
             cam = self.cam_extractor.fuse_cams(cams)
             probs = probs.gather(1, preds.unsqueeze(1)).squeeze(1)
         self.cam_extractor._hooks_enabled = False

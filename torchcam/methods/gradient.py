@@ -32,7 +32,7 @@ class _GradCAM(_CAM):
     ) -> None:
         super().__init__(model, target_layer, input_shape, **kwargs)
         # Ensure ReLU is applied before normalization
-        self._relu = True
+        self._relu = False
         # Model output is used by the extractor
         self._score_used = True
         for idx, name in enumerate(self.target_names):
@@ -404,6 +404,7 @@ class ShapleyCAM(_GradCAM):
         # Input hook
         self.hook_handles.append(model.register_forward_pre_hook(self._store_input))  # type: ignore[arg-type]
         self._ihook_enabled = True
+        self._relu = False
 
     def _store_input(self, _: nn.Module, _input: Tensor) -> None:
         """Store model input tensor."""
@@ -447,13 +448,13 @@ class ShapleyCAM(_GradCAM):
             grad_outputs=self.hook_a,
             retain_graph=False
         )
-        # li = [
-        #     (grad - 0.5*act_T_H * act).flatten(2).mean(-1)
-        #     for act, grad, act_T_H in zip(self.hook_a, self.hook_g ,hvp)
-        # ]
         # print(torch.norm(hvp[0]))
+        # weight = [
+        #     (grad - 0.5*act_T_H)
+        #     for grad, act_T_H in zip(self.hook_g ,hvp)
+        # ]
         weight = [
-            (grad - 0.5*act_T_H).flatten(2).mean(-1)
+            (grad - 0.5*act_T_H)
             for grad, act_T_H in zip(self.hook_g ,hvp)
         ]
         return weight
